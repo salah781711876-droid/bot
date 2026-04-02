@@ -1,0 +1,22 @@
+{
+  "name": "whatsapp-filter-bot-vip",
+  "version": "2.0.0",
+  "description": "WhatsApp Filter Bot - VIP Edition V2 (Multi-Session)",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "^6.7.9",
+    "axios": "^1.7.2",
+    "express": "^4.19.2",
+    "node-telegram-bot-api": "^0.66.0",
+    "pino": "^9.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "author": "VIP Bot",
+  "license": "ISC"
+}
+
