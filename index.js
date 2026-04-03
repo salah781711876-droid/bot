@@ -6,6 +6,8 @@
  * + Anti-Crash & Anti-Hang System
  * + Anti-Duplicate Messages System (Per Chat Fixed)
  * + Auto-Delete Pairing Messages on Success
+ * + [NEW] Ban Notification System
+ * + [NEW] Fix Errors Button
  */
 
 const { default: makeWASocket, useMultiFileAuthState, fetchLatestBaileysVersion, DisconnectReason, Browsers } = require("@whiskeysockets/baileys");
@@ -24,7 +26,7 @@ if (!fsSync.existsSync(SESSIONS_DIR)) {
 }
 
 // --- Bot Settings ---
-const token = '7683591540:AAFkxx62c8rtUDBb2oTDEgO7_1en9FpZJWo';
+const token = '7683591540:AAFkxx62c8rtUDBb2oTDEgO7_1en9FpZJWo'; // ضع توكن البوت الخاص بك
 
 // --- Express Server to keep the bot alive ---
 const app = express();
@@ -70,7 +72,7 @@ function getUserState(chatId) {
             stopSignal: false,
             waitingForPair: false,
             notOnWa: [],
-            pairingMessages: [] // لتخزين معرفات الرسائل المراد حذفها بعد الربط
+            pairingMessages: []
         });
     }
     return userStates.get(chatId);
@@ -85,19 +87,17 @@ async function startWhatsApp(chatId, phoneToPair = null) {
     
     const { state: authState, saveCreds } = await useMultiFileAuthState(sessionFolder);
     const { version } = await fetchLatestBaileysVersion();
-
     const sock = makeWASocket({
         version,
         auth: authState,
         printQRInTerminal: false,
-        logger: pino({ level: 'error' }), // إظهار الأخطاء الحقيقية فقط
+        logger: pino({ level: 'error' }),
         browser: Browsers.ubuntu('Chrome'), 
     });
 
     state.sock = sock;
     sock.ev.on('creds.update', saveCreds);
 
-    // طلب كود الربط إذا تم إدخال رقم جديد وغير مسجل من قبل
     if (phoneToPair && !sock.authState.creds.registered) {
         setTimeout(async () => {
             try {
@@ -105,11 +105,11 @@ async function startWhatsApp(chatId, phoneToPair = null) {
                 code = code?.match(/.{1,4}/g)?.join('-') || code;
                 
                 const msg = await bot.sendMessage(chatId, `✅ *Pairing code generated successfully!*\n\nاضغط على الكود للنسخ:\n\`${code}\`\n\n📌 *Activation steps:*\n1. Open WhatsApp on your phone.\n2. Go to Linked Devices.\n3. Select "Link a device".\n4. Select "Link with phone number instead".\n5. Enter the code above 👆`, { parse_mode: 'Markdown' });
-                state.pairingMessages.push(msg.message_id); // حفظ الرسالة لحذفها لاحقاً
+                state.pairingMessages.push(msg.message_id);
             } catch (e) {
                 bot.sendMessage(chatId, `❌ *Failed to request code!*\nReason: The number might be invalid or WhatsApp servers blocked the request temporarily.\nError: ${e.message}`, { parse_mode: 'Markdown' });
             }
-        }, 2000); // الانتظار قليلاً لضمان تهيئة السوكت
+        }, 2000);
     }
 
     sock.ev.on('connection.update', async (update) => {
@@ -118,13 +118,11 @@ async function startWhatsApp(chatId, phoneToPair = null) {
         if (connection === 'open') {
             console.log(`✅ [WHATSAPP] User ${chatId} connected!`);
             bot.sendMessage(chatId, "✅ *تمت عملية الربط بنجاح! البوت مستعد الآن لبدء الفحص.* 🎉", { parse_mode: 'Markdown' });
-
-            // حذف جميع رسائل الربط السابقة لتنظيف المحادثة
             if (state.pairingMessages.length > 0) {
                 for (let msgId of state.pairingMessages) {
                     bot.deleteMessage(chatId, msgId).catch(() => {});
                 }
-                state.pairingMessages = []; // تصفير المصفوفة
+                state.pairingMessages = [];
             }
         }
 
@@ -136,6 +134,12 @@ async function startWhatsApp(chatId, phoneToPair = null) {
                 await fs.rm(sessionFolder, { recursive: true, force: true }).catch(() => {});
                 state.sock = null;
                 bot.sendMessage(chatId, "🚪 *تم إلغاء ربط رقم الهاتف بالبوت بنجاح.*\nيمكنك الآن ربط رقم هاتف جديد باستخدام الأمر /pair", { parse_mode: 'Markdown' });
+            } else if (reason === 403) {
+                // 🚨 كود 403 يعني أن الرقم محظور (Forbidden) 🚨
+                console.log(`🚨 [WHATSAPP] User ${chatId} NUMBER BANNED!`);
+                await fs.rm(sessionFolder, { recursive: true, force: true }).catch(() => {});
+                state.sock = null;
+                bot.sendMessage(chatId, "🚨 *تنبيه هام جداً!* 🚨\n\n⚠️ *يبدو أن الرقم المرتبط بالبوت قد تعرض للحظر من قبل شركة واتساب!* ❌\n\nتم مسح الجلسة تلقائياً للحماية. يرجى استخدام رقم آخر والمحاولة مرة أخرى.", { parse_mode: 'Markdown' });
             } else {
                 console.log(`♻️ [WHATSAPP] Reconnecting ${chatId}... (Reason Code: ${reason})`);
                 setTimeout(() => startWhatsApp(chatId), 2000);
@@ -154,7 +158,7 @@ async function restoreSessions() {
         }
     }
 }
-restoreSessions(); // تشغيل فوري
+restoreSessions();
 
 // --- Logout Function ---
 async function handleLogout(chatId) {
@@ -166,7 +170,7 @@ async function handleLogout(chatId) {
         bot.sendMessage(chatId, "⏳ *جاري تسجيل الخروج وإلغاء الربط...*", { parse_mode: 'Markdown' });
         try {
             await Promise.race([
-                sock.logout(), // هذا سيستدعي تلقائياً connection === 'close' بالأسفل
+                sock.logout(),
                 new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 10000))
             ]);
         } catch (err) {
@@ -207,7 +211,6 @@ async function processQueue(chatId) {
         return;
     }
 
-    // السرعة القصوى الأصلية
     const BATCH_SIZE = 25; 
 
     while (state.queue.length > 0 && !state.stopSignal) {
@@ -221,7 +224,6 @@ async function processQueue(chatId) {
         
         const promises = batch.map(async (number) => {
             const cleanNumber = number.replace(/[^0-9]/g, '');
-            // التأكد من أن الرقم طوله منطقي
             if (cleanNumber.length >= 8 && cleanNumber.length <= 15) {
                 try {
                     const result = await Promise.race([
@@ -234,11 +236,10 @@ async function processQueue(chatId) {
                         state.notOnWa.push(`+${cleanNumber}`);
                         bot.sendMessage(chatId, `❌ ليس على واتساب (اضغط للنسخ):\n\`+${cleanNumber}\``, { parse_mode: 'Markdown' }).catch(() => {});
                     }
-                } catch (e) { 
-                    // تجاهل للحفاظ على السرعة
-                }
+                } catch (e) {}
             }
         });
+
         await Promise.all(promises);
         current += batch.length;
         
@@ -254,9 +255,9 @@ async function processQueue(chatId) {
             lastUpdateTime = Date.now();
         }
         
-        // التأخير السريع جداً 
         await sleep(150); 
     }
+
     state.isProcessing = false;
     let finalTotal = current;
 
@@ -268,7 +269,6 @@ async function processQueue(chatId) {
     }
 
     if (state.notOnWa.length > 0) {
-        // إنشاء ملف فريد لكل مستخدم وعملية لمنع تداخل الملفات
         const fileName = `results_${chatId}_${Date.now()}.txt`;
         await fs.writeFile(fileName, "Numbers without WhatsApp accounts:\n\n" + state.notOnWa.join('\n'));
         await bot.sendDocument(chatId, fileName, { 
@@ -292,14 +292,12 @@ bot.setMyCommands([
 ]);
 
 bot.on('message', async (msg) => {
-    // 🛑 تطبيق نظام منع التكرار لكل مستخدم لمنع تداخل الايديهات 🛑
     if (isDuplicate(`${msg.chat.id}_${msg.message_id}`)) return;
     
     const chatId = msg.chat.id;
     const text = msg.text || msg.caption || '';
     const state = getUserState(chatId);
 
-    // Commands Handling
     if (text === '/reset') {
         const sessionFolder = path.join(SESSIONS_DIR, `session_${chatId}`);
         bot.sendMessage(chatId, "🔄 *Resetting session and clearing cache...*", { parse_mode: 'Markdown' });
@@ -315,7 +313,8 @@ bot.on('message', async (msg) => {
                 inline_keyboard: [
                     [{ text: "▶️ Start Scan", callback_data: 'start_scan' }],
                     [{ text: "🔗 Link WhatsApp", callback_data: 'pair_wa' }, { text: "🚪 Logout", callback_data: 'logout_wa' }],
-                    [{ text: "📊 Connection Status", callback_data: 'status_wa' }, { text: "🛑 Stop Scan", callback_data: 'cancel_scan' }]
+                    [{ text: "📊 Connection Status", callback_data: 'status_wa' }, { text: "🛑 Stop Scan", callback_data: 'cancel_scan' }],
+                    [{ text: "🛠️ إصلاح الأعطال (Reset)", callback_data: 'reset_bot' }] // <-- زر إصلاح الأعطال الجديد
                 ]
             }
         };
@@ -329,9 +328,9 @@ bot.on('message', async (msg) => {
             return;
         }
         state.waitingForPair = true;
-        state.pairingMessages.push(msg.message_id); // حفظ أمر اليوزر
+        state.pairingMessages.push(msg.message_id); 
         const m = await bot.sendMessage(chatId, "📲 *Send the WhatsApp number now in international format*\n*(Example: 967712345678 or 201012345678)*\n\n⚠️ _Without + or leading zeros_", { parse_mode: 'Markdown' });
-        state.pairingMessages.push(m.message_id); // حفظ رد البوت
+        state.pairingMessages.push(m.message_id);
         return;
     }
 
@@ -352,10 +351,9 @@ bot.on('message', async (msg) => {
         return;
     }
 
-    // Receiving Number for Pairing Code
     if (state.waitingForPair && !text.startsWith('/')) {
         state.waitingForPair = false;
-        state.pairingMessages.push(msg.message_id); // حفظ رسالة الرقم الذي أرسله المستخدم
+        state.pairingMessages.push(msg.message_id); 
         
         let phone = text.replace(/[^0-9]/g, '');
         if (phone.startsWith('00')) phone = phone.substring(2); 
@@ -369,12 +367,10 @@ bot.on('message', async (msg) => {
         const m = await bot.sendMessage(chatId, `⏳ *Requesting pairing code for number:* \`${phone}\`...`, { parse_mode: 'Markdown' });
         state.pairingMessages.push(m.message_id);
         
-        // هنا يتم إنشاء سوكت جديد وطلب كود الربط بدلاً من استخدام سوكت قديم
         await startWhatsApp(chatId, phone);
         return;
     }
 
-    // Receiving numbers file
     if (msg.document && msg.document.file_name && msg.document.file_name.endsWith('.txt')) {
         bot.sendMessage(chatId, "⏳ *Reading file and extracting numbers...*", { parse_mode: 'Markdown' });
         try {
@@ -396,7 +392,6 @@ bot.on('message', async (msg) => {
         return;
     }
 
-    // Receiving plain text numbers
     const numbers = text.match(/\d+/g);
     if (numbers && !text.startsWith('/')) {
         state.queue = state.queue.concat(numbers);
@@ -425,11 +420,21 @@ bot.on('callback_query', async (query) => {
     } else if (data === 'pair_wa') {
         state.waitingForPair = true;
         const m = await bot.sendMessage(chatId, "📲 *Send the WhatsApp number now in international format*\n*(Example: 967712345678)*\n\n⚠️ _Without + or leading zeros_", { parse_mode: 'Markdown' });
-        state.pairingMessages.push(m.message_id); // حفظ لتنظيفها لاحقاً
+        state.pairingMessages.push(m.message_id);
         bot.answerCallbackQuery(query.id);
     } else if (data === 'cancel_scan') {
         state.stopSignal = true;
         bot.answerCallbackQuery(query.id, { text: "🛑 Stopping scan..." });
+    } else if (data === 'reset_bot') {
+        // --- دالة زر إصلاح الأعطال ---
+        const sessionFolder = path.join(SESSIONS_DIR, `session_${chatId}`);
+        bot.sendMessage(chatId, "🔄 *جاري إصلاح الأعطال ومسح الجلسة القديمة...*", { parse_mode: 'Markdown' });
+        await fs.rm(sessionFolder, { recursive: true, force: true }).catch(() => {});
+        state.sock = null;
+        state.isProcessing = false;
+        state.queue = [];
+        state.stopSignal = true;
+        bot.sendMessage(chatId, "✅ *تم إصلاح الأعطال وإعادة ضبط البوت بالكامل. يرجى ربط رقمك من جديد عبر زر (🔗 Link WhatsApp).* 🚀", { parse_mode: 'Markdown' });
+        bot.answerCallbackQuery(query.id, { text: "تم الإصلاح بنجاح 🛠️", show_alert: true });
     }
 });
-
