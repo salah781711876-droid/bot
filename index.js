@@ -8,6 +8,7 @@
  * + Auto-Delete Pairing Messages on Success
  * + [NEW] Ban Notification System
  * + [NEW] Fix Errors Button
+ * + [NEW] Auto Keep-Alive System (Render Fix)
  */
 
 const { default: makeWASocket, useMultiFileAuthState, fetchLatestBaileysVersion, DisconnectReason, Browsers } = require("@whiskeysockets/baileys");
@@ -27,12 +28,23 @@ if (!fsSync.existsSync(SESSIONS_DIR)) {
 
 // --- Bot Settings ---
 const token = '7683591540:AAFkxx62c8rtUDBb2oTDEgO7_1en9FpZJWo'; // ضع توكن البوت الخاص بك
+const RENDER_URL = 'https://bot-3siq.onrender.com'; // رابط الاستضافة الخاص بك
 
 // --- Express Server to keep the bot alive ---
 const app = express();
 const port = process.env.PORT || 3000;
-app.get('/', (req, res) => res.send('WhatsApp Filter Bot is Running 🟢 (VIP Edition V2)'));
+app.get('/', (req, res) => res.send('WhatsApp Filter Bot is Running 🟢 (VIP Edition V2) - Awake!'));
 app.listen(port, () => console.log(`🌐 [SERVER] Server is now running on port: ${port}`));
+
+// --- نظام منع السكون (Keep-Alive) للاستضافات المجانية ---
+setInterval(async () => {
+    try {
+        await axios.get(RENDER_URL);
+        console.log('✅ [KEEP-ALIVE] Pinged successfully, bot is kept awake.');
+    } catch (error) {
+        console.log('⚠️ [KEEP-ALIVE] Failed to ping:', error.message);
+    }
+}, 50 * 1000); // تم التعديل: يقوم بزيارة الرابط كل 50 ثانية (50,000 ملي ثانية)
 
 const bot = new TelegramBot(token, { polling: true });
 
@@ -135,7 +147,6 @@ async function startWhatsApp(chatId, phoneToPair = null) {
                 state.sock = null;
                 bot.sendMessage(chatId, "🚪 *تم إلغاء ربط رقم الهاتف بالبوت بنجاح.*\nيمكنك الآن ربط رقم هاتف جديد باستخدام الأمر /pair", { parse_mode: 'Markdown' });
             } else if (reason === 403) {
-                // 🚨 كود 403 يعني أن الرقم محظور (Forbidden) 🚨
                 console.log(`🚨 [WHATSAPP] User ${chatId} NUMBER BANNED!`);
                 await fs.rm(sessionFolder, { recursive: true, force: true }).catch(() => {});
                 state.sock = null;
@@ -314,11 +325,12 @@ bot.on('message', async (msg) => {
                     [{ text: "▶️ Start Scan", callback_data: 'start_scan' }],
                     [{ text: "🔗 Link WhatsApp", callback_data: 'pair_wa' }, { text: "🚪 Logout", callback_data: 'logout_wa' }],
                     [{ text: "📊 Connection Status", callback_data: 'status_wa' }, { text: "🛑 Stop Scan", callback_data: 'cancel_scan' }],
-                    [{ text: "🛠️ إصلاح الأعطال (Reset)", callback_data: 'reset_bot' }] // <-- زر إصلاح الأعطال الجديد
+                    [{ text: "🛠️ إصلاح الأعطال (Reset)", callback_data: 'reset_bot' }], 
+                    [{ text: "🔌 تنشيط البوت (إذا توقف)", url: "https://bot-3siq.onrender.com" }]
                 ]
             }
         };
-        bot.sendMessage(chatId, "👑 *Welcome to Auto Filter Bot (VIP)* 👑\n\nPlease select an action from the menu below:", { parse_mode: 'Markdown', ...opts });
+        bot.sendMessage(chatId, "👑 *Welcome to Auto Filter Bot (VIP)* 👑\n\nPlease select an action from the menu below:\n\n_ملاحظة: إذا توقف البوت عن الرد، اضغط على زر التنشيط بالأسفل._", { parse_mode: 'Markdown', ...opts });
         return;
     }
 
@@ -426,7 +438,6 @@ bot.on('callback_query', async (query) => {
         state.stopSignal = true;
         bot.answerCallbackQuery(query.id, { text: "🛑 Stopping scan..." });
     } else if (data === 'reset_bot') {
-        // --- دالة زر إصلاح الأعطال ---
         const sessionFolder = path.join(SESSIONS_DIR, `session_${chatId}`);
         bot.sendMessage(chatId, "🔄 *جاري إصلاح الأعطال ومسح الجلسة القديمة...*", { parse_mode: 'Markdown' });
         await fs.rm(sessionFolder, { recursive: true, force: true }).catch(() => {});
