@@ -1,15 +1,11 @@
 /**
- * WhatsApp Filter Bot - VIP Edition V2 (Plug & Play)
+ * WhatsApp Filter Bot - VIP Edition V3 (With Activity Filter)
  * 100% English & Arabic Edition - FIXED: Multi-Session, Pairing Code, & Bugs
- * + Real-time reporting for numbers without WA (1-tap copy)
- * + Max Speed Restored (Batch 25 / 150ms)
+ * + Real-time reporting for numbers without WA & Inactive Numbers
+ * + Max Speed Restored (Batch 25)
  * + Anti-Crash & Anti-Hang System
- * + Anti-Duplicate Messages System (Per Chat Fixed)
- * + Auto-Delete Pairing Messages on Success
- * + [NEW] Ban Notification System
- * + [NEW] Fix Errors Button
- * + [NEW] Auto Keep-Alive System (Render Fix)
- */
+ * + [NEW] Activity Filter (Last Seen > 48h)
+ */ 
 
 const { default: makeWASocket, useMultiFileAuthState, fetchLatestBaileysVersion, DisconnectReason, Browsers } = require("@whiskeysockets/baileys");
 const TelegramBot = require('node-telegram-bot-api');
@@ -18,23 +14,23 @@ const express = require('express');
 const fs = require('fs').promises;
 const fsSync = require('fs');
 const axios = require('axios');
-const path = require('path');
+const path = require('path'); 
 
 // --- إعداد مجلد الجلسات المتعددة ---
 const SESSIONS_DIR = './sessions';
 if (!fsSync.existsSync(SESSIONS_DIR)) {
     fsSync.mkdirSync(SESSIONS_DIR);
-}
+} 
 
 // --- Bot Settings ---
 const token = '7683591540:AAFkxx62c8rtUDBb2oTDEgO7_1en9FpZJWo'; // ضع توكن البوت الخاص بك
-const RENDER_URL = 'https://bot-3siq.onrender.com'; // رابط الاستضافة الخاص بك
+const RENDER_URL = 'https://bot-3siq.onrender.com'; // رابط الاستضافة الخاص بك 
 
 // --- Express Server to keep the bot alive ---
 const app = express();
 const port = process.env.PORT || 3000;
-app.get('/', (req, res) => res.send('WhatsApp Filter Bot is Running 🟢 (VIP Edition V2) - Awake!'));
-app.listen(port, () => console.log(`🌐 [SERVER] Server is now running on port: ${port}`));
+app.get('/', (req, res) => res.send('WhatsApp Filter Bot is Running 🟢 (VIP Edition V3) - Awake!'));
+app.listen(port, () => console.log(`🌐 [SERVER] Server is now running on port: ${port}`)); 
 
 // --- نظام منع السكون (Keep-Alive) للاستضافات المجانية ---
 setInterval(async () => {
@@ -44,9 +40,9 @@ setInterval(async () => {
     } catch (error) {
         console.log('⚠️ [KEEP-ALIVE] Failed to ping:', error.message);
     }
-}, 50 * 1000); // تم التعديل: يقوم بزيارة الرابط كل 50 ثانية (50,000 ملي ثانية)
+}, 50 * 1000); 
 
-const bot = new TelegramBot(token, { polling: true });
+const bot = new TelegramBot(token, { polling: true }); 
 
 // ==========================================
 // 🛡️ ANTI-CRASH SYSTEM
@@ -54,7 +50,7 @@ const bot = new TelegramBot(token, { polling: true });
 bot.on('polling_error', (error) => console.log(`⚠️ [Polling Warning]: ${error.code} - Bot is still running...`));
 bot.on('error', (error) => console.log(`⚠️ [Bot Error]: ${error.message}`));
 process.on('unhandledRejection', (reason) => console.log('⚠️ [Unhandled Rejection]:', reason));
-process.on('uncaughtException', (error) => console.log('⚠️ [Uncaught Exception]:', error.message));
+process.on('uncaughtException', (error) => console.log('⚠️ [Uncaught Exception]:', error.message)); 
 
 // ==========================================
 // 🛡️ ANTI-DUPLICATE SYSTEM (FIXED)
@@ -70,7 +66,7 @@ function isDuplicate(uniqueId) {
         arr.slice(1000).forEach(val => processedUpdates.add(val));
     }
     return false;
-}
+} 
 
 // ==========================================
 // --- User State Management ---
@@ -84,13 +80,54 @@ function getUserState(chatId) {
             stopSignal: false,
             waitingForPair: false,
             notOnWa: [],
-            pairingMessages: []
+            inactiveNumbers: [], // قائمة الأرقام غير النشطة (> 48 ساعة)
+            pairingMessages: [],
+            scanMode: 'normal' // 'normal' أو 'activity'
         });
     }
     return userStates.get(chatId);
-}
+} 
 
-const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms)); 
+
+// ==========================================
+// 🕵️ دالة فحص حالة الظهور (Activity Helper)
+// ==========================================
+async function checkPresence(sock, jid) {
+    return new Promise(async (resolve) => {
+        let resolved = false;
+        
+        // مهلة 3 ثوانٍ لعدم تعطيل سرعة الفحص
+        const timeout = setTimeout(() => {
+            if (!resolved) {
+                resolved = true;
+                sock.ev.off('presence.update', listener);
+                resolve({ hidden: true }); // إذا انتهى الوقت نفترض أن الخصوصية تمنع الوصول
+            }
+        }, 3000);
+
+        const listener = (update) => {
+            if (update.id === jid) {
+                resolved = true;
+                clearTimeout(timeout);
+                sock.ev.off('presence.update', listener);
+                
+                const userPresence = update.presences ? Object.values(update.presences)[0] : null;
+                resolve({ hidden: !userPresence, data: userPresence });
+            }
+        };
+        
+        sock.ev.on('presence.update', listener);
+        try {
+            await sock.presenceSubscribe(jid);
+        } catch (e) {
+            resolved = true;
+            clearTimeout(timeout);
+            sock.ev.off('presence.update', listener);
+            resolve({ hidden: true });
+        }
+    });
+}
 
 // --- Initialize WhatsApp Connection (Multi-Session Support) ---
 async function startWhatsApp(chatId, phoneToPair = null) {
@@ -105,10 +142,10 @@ async function startWhatsApp(chatId, phoneToPair = null) {
         printQRInTerminal: false,
         logger: pino({ level: 'error' }),
         browser: Browsers.ubuntu('Chrome'), 
-    });
+    }); 
 
     state.sock = sock;
-    sock.ev.on('creds.update', saveCreds);
+    sock.ev.on('creds.update', saveCreds); 
 
     if (phoneToPair && !sock.authState.creds.registered) {
         setTimeout(async () => {
@@ -122,7 +159,7 @@ async function startWhatsApp(chatId, phoneToPair = null) {
                 bot.sendMessage(chatId, `❌ *Failed to request code!*\nReason: The number might be invalid or WhatsApp servers blocked the request temporarily.\nError: ${e.message}`, { parse_mode: 'Markdown' });
             }
         }, 2000);
-    }
+    } 
 
     sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect } = update;
@@ -136,7 +173,7 @@ async function startWhatsApp(chatId, phoneToPair = null) {
                 }
                 state.pairingMessages = [];
             }
-        }
+        } 
 
         if (connection === 'close') {
             const reason = lastDisconnect?.error?.output?.statusCode;
@@ -157,7 +194,7 @@ async function startWhatsApp(chatId, phoneToPair = null) {
             }
         }
     });
-}
+} 
 
 // --- استعادة جلسات المستخدمين عند تشغيل السيرفر ---
 async function restoreSessions() {
@@ -169,13 +206,13 @@ async function restoreSessions() {
         }
     }
 }
-restoreSessions();
+restoreSessions(); 
 
 // --- Logout Function ---
 async function handleLogout(chatId) {
     const state = getUserState(chatId);
     const sock = state.sock;
-    const sessionFolder = path.join(SESSIONS_DIR, `session_${chatId}`);
+    const sessionFolder = path.join(SESSIONS_DIR, `session_${chatId}`); 
 
     if (sock?.ws?.isOpen && sock?.user) {
         bot.sendMessage(chatId, "⏳ *جاري تسجيل الخروج وإلغاء الربط...*", { parse_mode: 'Markdown' });
@@ -193,34 +230,36 @@ async function handleLogout(chatId) {
         state.sock = null;
         bot.sendMessage(chatId, "🚪 *تم إلغاء ربط رقم الهاتف بالبوت ومسح الجلسة.*\nيمكنك الآن ربط رقم هاتف جديد باستخدام الأمر /pair", { parse_mode: 'Markdown' });
     }
-}
+} 
 
 // --- Fast Scan System ---
 async function processQueue(chatId) {
     const state = getUserState(chatId);
-    const sock = state.sock;
+    const sock = state.sock; 
 
     if (state.isProcessing) return;
     
     if (!sock?.ws?.isOpen) {
         bot.sendMessage(chatId, "❌ *Bot is not connected to WhatsApp.*\nLink a number first using the (🔗 Link WhatsApp) button.", { parse_mode: 'Markdown' });
         return;
-    }
+    } 
 
     state.isProcessing = true;
     state.stopSignal = false;
     state.notOnWa = [];
+    state.inactiveNumbers = [];
     
     let current = 0;
     let lastUpdateTime = Date.now();
     let statusMsg;
     
     try {
-        statusMsg = await bot.sendMessage(chatId, `⏳ *Starting quick scan...* 🚀`, { parse_mode: 'Markdown' });
+        const modeText = state.scanMode === 'activity' ? '⏳ *بدء فحص النشاط (48h)...*' : '⏳ *Starting quick scan...* 🚀';
+        statusMsg = await bot.sendMessage(chatId, modeText, { parse_mode: 'Markdown' });
     } catch (e) {
         state.isProcessing = false;
         return;
-    }
+    } 
 
     const BATCH_SIZE = 25; 
 
@@ -228,7 +267,7 @@ async function processQueue(chatId) {
         if (!state.sock?.ws?.isOpen) {
             await sleep(3000); 
             continue; 
-        }
+        } 
 
         let total = current + state.queue.length;
         const batch = state.queue.splice(0, BATCH_SIZE);
@@ -246,10 +285,30 @@ async function processQueue(chatId) {
                     if (!waData || !waData.exists) {
                         state.notOnWa.push(`+${cleanNumber}`);
                         bot.sendMessage(chatId, `❌ ليس على واتساب (اضغط للنسخ):\n\`+${cleanNumber}\``, { parse_mode: 'Markdown' }).catch(() => {});
+                    } else if (state.scanMode === 'activity') {
+                        // الفحص المتقدم للنشاط
+                        const presenceRes = await checkPresence(state.sock, waData.jid);
+                        
+                        if (!presenceRes.hidden && presenceRes.data) {
+                            const pData = presenceRes.data;
+                            if (pData.lastKnownPresence === 'unavailable' && pData.lastSeen) {
+                                const lastSeenDate = new Date(pData.lastSeen * 1000);
+                                const diffHours = (Date.now() - lastSeenDate.getTime()) / (1000 * 60 * 60);
+                                
+                                if (diffHours >= 48) {
+                                    state.inactiveNumbers.push(`+${cleanNumber}`);
+                                    const lastSeenStr = lastSeenDate.toLocaleString('en-US'); // تنسيق التاريخ
+                                    
+                                    // إرسال فوري للرقم غير النشط
+                                    bot.sendMessage(chatId, `⚠️ *رقم غير نشط تم اكتشافه!*\n📞 الرقم: \`+${cleanNumber}\`\n🕒 آخر ظهور: ${lastSeenStr}\n⏳ منذ: ${Math.floor(diffHours)} ساعة`, { parse_mode: 'Markdown' }).catch(() => {});
+                                }
+                            }
+                        }
+                        // إذا كان النشاط مخفي تماماً (presenceRes.hidden === true) سيتم اعتباره نشط تلقائياً ولا يُتخذ أي إجراء.
                     }
                 } catch (e) {}
             }
-        });
+        }); 
 
         await Promise.all(promises);
         current += batch.length;
@@ -258,8 +317,13 @@ async function processQueue(chatId) {
             const percent = Math.min(100, Math.floor((current / total) * 100));
             const progress = "🟩".repeat(Math.floor(percent / 10)) + "⬜".repeat(10 - Math.floor(percent / 10));
             
+            let statsText = `✅ *Scanned:* ${current} of ${total}\n❌ *Not on WA:* ${state.notOnWa.length}`;
+            if (state.scanMode === 'activity') {
+                statsText += `\n⚠️ *Inactive (>48h):* ${state.inactiveNumbers.length}`;
+            }
+
             await bot.editMessageText(
-                `⚡ *Scan in progress...*\n\n📊 *Progress:* \n${progress} *${percent}%*\n\n✅ *Scanned:* ${current} of ${total}\n❌ *Numbers without WhatsApp:* ${state.notOnWa.length}`,
+                `⚡ *Scan in progress...*\n\n📊 *Progress:* \n${progress} *${percent}%*\n\n${statsText}`,
                 { chat_id: chatId, message_id: statusMsg.message_id, parse_mode: 'Markdown' }
             ).catch(() => {});
             
@@ -267,30 +331,44 @@ async function processQueue(chatId) {
         }
         
         await sleep(150); 
-    }
+    } 
 
     state.isProcessing = false;
-    let finalTotal = current;
+    let finalTotal = current; 
 
     if (state.stopSignal) {
         state.queue = []; 
         bot.sendMessage(chatId, "🛑 *Scan stopped manually.*", { parse_mode: 'Markdown' });
     } else {
         bot.sendMessage(chatId, "🏁 *Scan completed!* 🎉", { parse_mode: 'Markdown' });
-    }
+    } 
 
+    // إرسال تقرير الأرقام التي لا تملك واتساب
     if (state.notOnWa.length > 0) {
-        const fileName = `results_${chatId}_${Date.now()}.txt`;
+        const fileName = `NoWA_${chatId}_${Date.now()}.txt`;
         await fs.writeFile(fileName, "Numbers without WhatsApp accounts:\n\n" + state.notOnWa.join('\n'));
         await bot.sendDocument(chatId, fileName, { 
-            caption: `📈 *Total scanned:* ${finalTotal}\n❌ *Numbers without WhatsApp:* ${state.notOnWa.length}\n\nThe attached file contains all numbers without WhatsApp.`, 
+            caption: `📉 *تقرير الأرقام بدون واتساب*\n❌ العدد: ${state.notOnWa.length}`, 
             parse_mode: 'Markdown' 
         });
         await fs.unlink(fileName).catch(() => {});
-    } else if (!state.stopSignal && finalTotal > 0) {
-        bot.sendMessage(chatId, "✅ All sent numbers have active WhatsApp accounts.", { parse_mode: 'Markdown' });
     }
-}
+    
+    // إرسال تقرير الأرقام غير النشطة (إن وجدت في وضع النشاط)
+    if (state.scanMode === 'activity' && state.inactiveNumbers.length > 0) {
+        const fileNameAct = `Inactive_${chatId}_${Date.now()}.txt`;
+        await fs.writeFile(fileNameAct, "Inactive Numbers (> 48h):\n\n" + state.inactiveNumbers.join('\n'));
+        await bot.sendDocument(chatId, fileNameAct, { 
+            caption: `⚠️ *تقرير الأرقام غير النشطة (> 48 ساعة)*\nتجد في الملف المرفق جميع الأرقام الخاملة.\nالعدد الكلي: ${state.inactiveNumbers.length}`, 
+            parse_mode: 'Markdown' 
+        });
+        await fs.unlink(fileNameAct).catch(() => {});
+    }
+
+    if (!state.stopSignal && finalTotal > 0 && state.notOnWa.length === 0 && (state.scanMode !== 'activity' || state.inactiveNumbers.length === 0)) {
+        bot.sendMessage(chatId, "✅ جميع الأرقام ممتازة (نشطة وتملك واتساب).", { parse_mode: 'Markdown' });
+    }
+} 
 
 // --- Commands and Messages Handling ---
 bot.setMyCommands([
@@ -300,14 +378,14 @@ bot.setMyCommands([
     { command: 'logout', description: '🚪 Logout' },
     { command: 'cancel', description: '🛑 Stop Scan' },
     { command: 'reset', description: '🔄 Reset Bot Session (Fix Bugs)' }
-]);
+]); 
 
 bot.on('message', async (msg) => {
     if (isDuplicate(`${msg.chat.id}_${msg.message_id}`)) return;
     
     const chatId = msg.chat.id;
     const text = msg.text || msg.caption || '';
-    const state = getUserState(chatId);
+    const state = getUserState(chatId); 
 
     if (text === '/reset') {
         const sessionFolder = path.join(SESSIONS_DIR, `session_${chatId}`);
@@ -316,13 +394,13 @@ bot.on('message', async (msg) => {
         state.sock = null;
         bot.sendMessage(chatId, "✅ *System completely reset. Send /pair to link your number again.*", { parse_mode: 'Markdown' });
         return;
-    }
+    } 
 
     if (text === '/start') {
         const opts = {
             reply_markup: {
                 inline_keyboard: [
-                    [{ text: "▶️ Start Scan", callback_data: 'start_scan' }],
+                    [{ text: "▶️ فحص عادي", callback_data: 'start_scan' }, { text: "⏳ فحص النشاط (48h)", callback_data: 'activity_scan' }],
                     [{ text: "🔗 Link WhatsApp", callback_data: 'pair_wa' }, { text: "🚪 Logout", callback_data: 'logout_wa' }],
                     [{ text: "📊 Connection Status", callback_data: 'status_wa' }, { text: "🛑 Stop Scan", callback_data: 'cancel_scan' }],
                     [{ text: "🛠️ إصلاح الأعطال (Reset)", callback_data: 'reset_bot' }], 
@@ -332,7 +410,7 @@ bot.on('message', async (msg) => {
         };
         bot.sendMessage(chatId, "👑 *Welcome to Auto Filter Bot (VIP)* 👑\n\nPlease select an action from the menu below:\n\n_ملاحظة: إذا توقف البوت عن الرد، اضغط على زر التنشيط بالأسفل._", { parse_mode: 'Markdown', ...opts });
         return;
-    }
+    } 
 
     if (text === '/pair') {
         if (state.sock?.ws?.isOpen && state.sock?.user) {
@@ -344,7 +422,7 @@ bot.on('message', async (msg) => {
         const m = await bot.sendMessage(chatId, "📲 *Send the WhatsApp number now in international format*\n*(Example: 967712345678 or 201012345678)*\n\n⚠️ _Without + or leading zeros_", { parse_mode: 'Markdown' });
         state.pairingMessages.push(m.message_id);
         return;
-    }
+    } 
 
     if (text === '/cancel') {
         state.stopSignal = true;
@@ -356,12 +434,12 @@ bot.on('message', async (msg) => {
         const status = state.sock?.ws?.isOpen ? `✅ *Status:* Connected\n📱 *Number:* +${state.sock.user?.id.split(':')[0]}` : "❌ *Status:* Disconnected";
         bot.sendMessage(chatId, status, { parse_mode: 'Markdown' });
         return;
-    }
+    } 
 
     if (text === '/logout') {
         await handleLogout(chatId);
         return;
-    }
+    } 
 
     if (state.waitingForPair && !text.startsWith('/')) {
         state.waitingForPair = false;
@@ -381,7 +459,7 @@ bot.on('message', async (msg) => {
         
         await startWhatsApp(chatId, phone);
         return;
-    }
+    } 
 
     if (msg.document && msg.document.file_name && msg.document.file_name.endsWith('.txt')) {
         bot.sendMessage(chatId, "⏳ *Reading file and extracting numbers...*", { parse_mode: 'Markdown' });
@@ -393,7 +471,7 @@ bot.on('message', async (msg) => {
             
             if (numbers && numbers.length > 0) {
                 state.queue = state.queue.concat(numbers);
-                bot.sendMessage(chatId, `📩 *Extracted ${numbers.length} numbers from file.*\n🚀 Starting scan immediately...`, { parse_mode: 'Markdown' });
+                bot.sendMessage(chatId, `📩 *تم استخراج ${numbers.length} رقم.*\n🚀 سيتم بدء الفحص باستخدام وضع: *${state.scanMode === 'activity' ? 'فحص النشاط 48h' : 'الفحص العادي'}*`, { parse_mode: 'Markdown' });
                 processQueue(chatId);
             } else {
                 bot.sendMessage(chatId, "⚠️ *No valid numbers found in the file.*", { parse_mode: 'Markdown' });
@@ -402,26 +480,31 @@ bot.on('message', async (msg) => {
             bot.sendMessage(chatId, "❌ *Failed to read file.* Make sure it's a valid .txt file.", { parse_mode: 'Markdown' });
         }
         return;
-    }
+    } 
 
     const numbers = text.match(/\d+/g);
     if (numbers && !text.startsWith('/')) {
         state.queue = state.queue.concat(numbers);
-        bot.sendMessage(chatId, `📩 *Received ${numbers.length} numbers.*\n🚀 Starting scan...`, { parse_mode: 'Markdown' });
+        bot.sendMessage(chatId, `📩 *تم استلام ${numbers.length} رقم.*\n🚀 سيتم بدء الفحص باستخدام وضع: *${state.scanMode === 'activity' ? 'فحص النشاط 48h' : 'الفحص العادي'}*`, { parse_mode: 'Markdown' });
         processQueue(chatId);
     }
-});
+}); 
 
 bot.on('callback_query', async (query) => {
     if (isDuplicate(`${query.message.chat.id}_${query.id}`)) return;
     
     const chatId = query.message.chat.id;
     const data = query.data;
-    const state = getUserState(chatId);
+    const state = getUserState(chatId); 
 
     if (data === 'start_scan') {
-        bot.sendMessage(chatId, "📩 *How to scan:*\nSend numbers directly here as a message, or upload a `.txt` file containing the numbers.", { parse_mode: 'Markdown' });
+        state.scanMode = 'normal'; // تعيين الوضع العادي
+        bot.sendMessage(chatId, "📩 *الفحص العادي النشط:*\nأرسل الأرقام مباشرة أو ارفع ملف `.txt` للبدء.", { parse_mode: 'Markdown' });
         bot.answerCallbackQuery(query.id);
+    } else if (data === 'activity_scan') {
+        state.scanMode = 'activity'; // تعيين وضع النشاط
+        bot.sendMessage(chatId, "⏳ *تم تفعيل وضع (فحص النشاط 48h):*\nأرسل الأرقام الآن! أي رقم يمتلك واتساب ولم يفتح منذ 48 ساعة سيتم الإبلاغ عنه فوراً وإرساله لك.", { parse_mode: 'Markdown' });
+        bot.answerCallbackQuery(query.id, { text: "وضع فحص النشاط مفعل ✅" });
     } else if (data === 'status_wa') {
         const status = state.sock?.ws?.isOpen ? `✅ *Status:* Connected\n📱 *Number:* +${state.sock.user?.id.split(':')[0]}` : "❌ *Status:* Disconnected";
         bot.answerCallbackQuery(query.id, { text: state.sock?.ws?.isOpen ? "Connected ✅" : "Disconnected ❌", show_alert: true });
