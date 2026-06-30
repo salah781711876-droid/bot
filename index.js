@@ -27,7 +27,7 @@ if (!fsSync.existsSync(SESSIONS_DIR)) {
 }
 
 // --- Bot Settings ---
-const token = '8911074579:AAH3VukgRcO1-aRCJ-Sq6gwBOpXKT61gn5k'; // ضع توكن البوت الخاص بك
+const token = '8871251608:AAGn3SN9LVGy2YLkpq7nx2o77kCxmnOX9KY'; // ضع توكن البوت الخاص بك
 const RENDER_URL = 'https://bot-3siq.onrender.com'; // رابط الاستضافة الخاص بك
 
 // --- Express Server to keep the bot alive ---
